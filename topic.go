@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"regexp"
 	"strings"
 	"sync"
@@ -21,7 +20,7 @@ type topicArgs struct {
 	replicas   bool
 	verbose    bool
 	pretty     bool
-	version    string
+	conn       connectionArgs
 }
 
 type topicCmd struct {
@@ -32,7 +31,7 @@ type topicCmd struct {
 	replicas   bool
 	verbose    bool
 	pretty     bool
-	version    sarama.KafkaVersion
+	config     *sarama.Config
 
 	client sarama.Client
 }
@@ -64,7 +63,6 @@ func (cmd *topicCmd) parseFlags(as []string) topicArgs {
 	flags.StringVar(&args.filter, "filter", "", "Regex to filter topics by name.")
 	flags.BoolVar(&args.verbose, "verbose", false, "More verbose logging to stderr.")
 	flags.BoolVar(&args.pretty, "pretty", true, "Control output pretty printing.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of topic:")
 		flags.PrintDefaults()
@@ -74,7 +72,7 @@ The values supplied on the command line win over environment variable values.
 `)
 		os.Exit(2)
 	}
-
+	parseConnectionFlags(flags, &args.conn)
 	flags.Parse(as)
 	return args
 }
@@ -111,27 +109,19 @@ func (cmd *topicCmd) parseArgs(as []string) {
 	cmd.replicas = args.replicas
 	cmd.pretty = args.pretty
 	cmd.verbose = args.verbose
-	cmd.version = kafkaVersion(args.version)
+	cmd.config = saramaConfig(&args.conn, "topic")
 }
 
 func (cmd *topicCmd) connect() {
 	var (
 		err error
-		usr *user.User
-		cfg = sarama.NewConfig()
 	)
 
-	cfg.Version = cmd.version
-
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-topic-" + sanitizeUsername(usr.Username)
 	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cfg)
+		fmt.Fprintf(os.Stderr, "sarama client configuration %#v", cmd.config)
 	}
 
-	if cmd.client, err = sarama.NewClient(cmd.brokers, cfg); err != nil {
+	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.config); err != nil {
 		failf("failed to create client err=%v", err)
 	}
 }

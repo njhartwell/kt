@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,13 +22,12 @@ type consumeCmd struct {
 	offsets     map[int32]interval
 	timeout     time.Duration
 	verbose     bool
-	version     sarama.KafkaVersion
+	config      *sarama.Config
 	encodeValue string
 	encodeKey   string
 	pretty      bool
-
-	client   sarama.Client
-	consumer sarama.Consumer
+	client      sarama.Client
+	consumer    sarama.Consumer
 }
 
 type offset struct {
@@ -74,10 +72,12 @@ type consumeArgs struct {
 	timeout     time.Duration
 	offsets     string
 	verbose     bool
-	version     string
 	encodeValue string
 	encodeKey   string
 	pretty      bool
+	tls         bool
+	clientCert  string
+	conn        connectionArgs
 }
 
 func parseOffset(str string) (offset, error) {
@@ -202,7 +202,6 @@ func (cmd *consumeCmd) parseArgs(as []string) {
 	cmd.timeout = args.timeout
 	cmd.verbose = args.verbose
 	cmd.pretty = args.pretty
-	cmd.version = kafkaVersion(args.version)
 
 	if args.encodeValue != "string" && args.encodeValue != "hex" && args.encodeValue != "base64" {
 		cmd.failStartup(fmt.Sprintf(`unsupported encodevalue argument %#v, only string, hex and base64 are supported.`, args.encodeValue))
@@ -235,18 +234,19 @@ func (cmd *consumeCmd) parseArgs(as []string) {
 	if err != nil {
 		cmd.failStartup(fmt.Sprintf("%s", err))
 	}
+	cmd.config = saramaConfig(&args.conn, "consume")
 }
 
 func (cmd *consumeCmd) parseFlags(as []string) consumeArgs {
 	var args consumeArgs
 	flags := flag.NewFlagSet("consume", flag.ExitOnError)
+	parseConnectionFlags(flags, &args.conn)
 	flags.StringVar(&args.topic, "topic", "", "Topic to consume (required).")
 	flags.StringVar(&args.brokers, "brokers", "", "Comma separated list of brokers. Port defaults to 9092 when omitted (defaults to localhost:9092).")
 	flags.StringVar(&args.offsets, "offsets", "", "Specifies what messages to read by partition and offset range (defaults to all).")
 	flags.DurationVar(&args.timeout, "timeout", time.Duration(0), "Timeout after not reading messages (default 0 to disable).")
 	flags.BoolVar(&args.verbose, "verbose", false, "More verbose logging to stderr.")
 	flags.BoolVar(&args.pretty, "pretty", true, "Control output pretty printing.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
 	flags.StringVar(&args.encodeValue, "encodevalue", "string", "Present message value as (string|hex|base64), defaults to string.")
 	flags.StringVar(&args.encodeKey, "encodekey", "string", "Present message key as (string|hex|base64), defaults to string.")
 
@@ -262,21 +262,13 @@ func (cmd *consumeCmd) parseFlags(as []string) consumeArgs {
 }
 
 func (cmd *consumeCmd) setupClient() {
-	var (
-		err error
-		usr *user.User
-		cfg = sarama.NewConfig()
-	)
-	cfg.Version = cmd.version
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-consume-" + sanitizeUsername(usr.Username)
+	var err error
+
 	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cfg)
+		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cmd.config)
 	}
 
-	if cmd.client, err = sarama.NewClient(cmd.brokers, cfg); err != nil {
+	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.config); err != nil {
 		failf("failed to create client err=%v", err)
 	}
 }
