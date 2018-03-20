@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,13 +16,13 @@ import (
 type groupCmd struct {
 	brokers    []string
 	group      string
+	config     *sarama.Config
 	filter     *regexp.Regexp
 	topic      string
 	partitions []int32
 	reset      int64
 	verbose    bool
 	pretty     bool
-	version    sarama.KafkaVersion
 	offsets    bool
 
 	client sarama.Client
@@ -55,7 +54,7 @@ func (cmd *groupCmd) run(args []string) {
 		sarama.Logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.saramaConfig()); err != nil {
+	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.config); err != nil {
 		failf("failed to create client err=%v", err)
 	}
 
@@ -285,7 +284,7 @@ func (cmd *groupCmd) connect(broker *sarama.Broker) error {
 		return nil
 	}
 
-	if err := broker.Open(cmd.saramaConfig()); err != nil {
+	if err := broker.Open(cmd.config); err != nil {
 		return err
 	}
 
@@ -299,22 +298,6 @@ func (cmd *groupCmd) connect(broker *sarama.Broker) error {
 	}
 
 	return nil
-}
-
-func (cmd *groupCmd) saramaConfig() *sarama.Config {
-	var (
-		err error
-		usr *user.User
-		cfg = sarama.NewConfig()
-	)
-
-	cfg.Version = cmd.version
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-group-" + sanitizeUsername(usr.Username)
-
-	return cfg
 }
 
 func (cmd *groupCmd) failStartup(msg string) {
@@ -338,7 +321,6 @@ func (cmd *groupCmd) parseArgs(as []string) {
 	cmd.verbose = args.verbose
 	cmd.pretty = args.pretty
 	cmd.offsets = args.offsets
-	cmd.version = kafkaVersion(args.version)
 
 	switch args.partitions {
 	case "", "all":
@@ -398,6 +380,8 @@ func (cmd *groupCmd) parseArgs(as []string) {
 			cmd.brokers[i] = b + ":9092"
 		}
 	}
+
+	cmd.config = saramaConfig(&args.conn, "group")
 }
 
 type groupArgs struct {
@@ -409,8 +393,8 @@ type groupArgs struct {
 	reset      string
 	verbose    bool
 	pretty     bool
-	version    string
 	offsets    bool
+	conn       connectionArgs
 }
 
 func (cmd *groupCmd) parseFlags(as []string) groupArgs {
@@ -423,9 +407,9 @@ func (cmd *groupCmd) parseFlags(as []string) groupArgs {
 	flags.StringVar(&args.reset, "reset", "", "Target offset to reset for consumer group (newest, oldest, or specific offset)")
 	flags.BoolVar(&args.verbose, "verbose", false, "More verbose logging to stderr.")
 	flags.BoolVar(&args.pretty, "pretty", true, "Control output pretty printing.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
 	flags.StringVar(&args.partitions, "partitions", allPartitionsHuman, "comma separated list of partitions to limit offsets to, or all")
 	flags.BoolVar(&args.offsets, "offsets", true, "Controls if offsets should be fetched (defauls to true)")
+	parseConnectionFlags(flags, &args.conn)
 
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of group:")
